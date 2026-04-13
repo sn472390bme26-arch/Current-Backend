@@ -28,7 +28,6 @@ function cleanOTPs() {
 // ── Patient Signup — Step 1: send OTP ────────────────────────────────────────
 router.post("/patient/signup",
   [
-    body("email").isEmail().normalizeEmail(),
     body("name").trim().notEmpty().withMessage("Name is required"),
     body("password").isLength({ min: 6 }).withMessage("Password must be at least 6 chars"),
     body("phone").trim().notEmpty().withMessage("Phone number is required"),
@@ -36,11 +35,9 @@ router.post("/patient/signup",
   async (req, res) => {
     if (!validate(req, res)) return;
     try {
-      const { email, name, password, phone } = req.body;
+      const { name, password, phone } = req.body;
       const normPhone = normalisePhone(phone);
 
-      if (db.prepare("SELECT id FROM users WHERE email=?").get(email))
-        return res.status(409).json({ error: "Email already registered. Please log in." });
       if (db.prepare("SELECT id FROM users WHERE phone=? AND role='patient'").get(normPhone))
         return res.status(409).json({ error: "Phone number already registered. Please log in." });
 
@@ -53,7 +50,7 @@ router.post("/patient/signup",
       db.prepare(`
         INSERT INTO otp_pending (id, phone, otp, context, data, expires_at)
         VALUES (?,?,?,'signup',?,?)
-      `).run(otpId, normPhone, otp, JSON.stringify({ email, name, hash }), expiresAt);
+      `).run(otpId, normPhone, otp, JSON.stringify({ name, hash }), expiresAt);
 
       await sendOTP(normPhone, otp);
 
@@ -141,17 +138,17 @@ router.post("/patient/verify-otp", async (req, res) => {
 
     // ── Signup: create account ────────────────────────────────────────────────
     if (pending.context === "signup") {
-      const { email, name, hash } = data;
-      const id = `p_${email}`;
+      const { name, hash } = data;
+      const id = `p_${pending.phone}`;
       db.prepare(`
         INSERT INTO users (id, email, name, password, role, phone, phone_verified)
-        VALUES (?,?,?,?,'patient',?,1)
-      `).run(id, email, name, hash, pending.phone);
+        VALUES (?,NULL,?,?,'patient',?,1)
+      `).run(id, name, hash, pending.phone);
       const user = db.prepare("SELECT * FROM users WHERE id=?").get(id);
-      console.log(`[auth] signup verified: ${email} phone: ${pending.phone}`);
+      console.log(`[auth] signup verified: phone: ${pending.phone}`);
       return res.json({
-        token: sign({ id: user.id, email: user.email, name: user.name, role: "patient" }),
-        user:  { id: user.id, email: user.email, name: user.name, role: "patient" },
+        token: sign({ id: user.id, name: user.name, phone: pending.phone, role: "patient" }),
+        user:  { id: user.id, name: user.name, phone: pending.phone, role: "patient" },
       });
     }
 
