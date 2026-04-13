@@ -314,4 +314,55 @@ router.get("/me", (req, res) => {
   catch { res.status(401).json({ error: "Invalid or expired token" }); }
 });
 
+
+
+// ── Forgot Password Step 1: send OTP ─────────────────────────────────────────
+router.post("/patient/forgot-password", async (req, res) => {
+  try {
+    const { phone } = req.body;
+    if (!phone) return res.status(400).json({ error: "Phone number is required." });
+    const normPhone = normalisePhone(phone);
+    const user = db.prepare("SELECT * FROM users WHERE phone=? AND role='patient'").get(normPhone);
+    if (!user) return res.status(404).json({ error: "No account found with this phone number." });
+    const otp = generateOTP();
+    const otpId = `otp_${Date.now()}_${Math.random().toString(36).slice(2,9)}`;
+    const expiresAt = Date.now() + 10 * 60 * 1000;
+    db.prepare("DELETE FROM otp_pending WHERE phone=? AND context='reset'").run(normPhone);
+    db.prepare(`INSERT INTO otp_pending (id, phone, otp, context, data, expires_at) VALUES (?,?,?,'reset',?,?)`).run(otpId, normPhone, otp, JSON.stringify({ userId: user.id }), expiresAt);
+    await sendOTP(normPhone, otp);
+    const resp = { success: true, otpId, maskedPhone: `+${normPhone.slice(0,2)}XXXXX${normPhone.slice(-4)}`, message: "OTP sent to your registered phone." };
+    if (IS_DEV) resp.devOtp = otp;
+    res.json(resp);
+  } catch (err) {
+    console.error("[auth forgot-password]", err.message);
+    res.status(500).json({ error: err.message || "Failed to send OTP." });
+  }
+});
+
+// ── Forgot Password Step 2: verify OTP + set new password ────────────────────
+router.post("/patient/reset-password", async (req, res) => {
+  try {
+    const { otpId, otp, newPassword } = req.body;
+    if (!otpId || !otp || !newPassword) return res.status(400).json({ error: "otpId, otp and newPassword are required." });
+    if (newPassword.length < 6) return res.status(400).json({ error: "Password must be at least 6 characters." });
+    const pending = db.prepare("SELECT * FROM otp_pending WHERE id=? AND context='reset'").get(otpId);
+    if (!pending) return res.status(400).json({ error: "OTP session not found or expired." });
+    if (Date.now() > pending.expires_at) { db.prepare("DELETE FROM otp_pending WHERE id=?").run(otpId); return res.status(400).json({ error: "OTP has expired. Please request a new one." }); }
+    if (pending.attempts >= 5) { db.prepare("DELETE FROM otp_pending WHERE id=?").run(otpId); return res.status(429).json({ error: "Too many wrong attempts. Please request a new OTP." }); }
+    if (pending.otp !== otp.trim()) {
+      db.prepare("UPDATE otp_pending SET attempts=attempts+1 WHERE id=?").run(otpId);
+      const left = 5 - (pending.attempts + 1);
+      return res.status(400).json({ error: `Incorrect OTP. ${left} attempt${left !== 1 ? "s" : ""} remaining.` });
+    }
+    const data = JSON.parse(pending.data || "{}");
+    db.prepare("DELETE FROM otp_pending WHERE id=?").run(otpId);
+    const hash = bcrypt.hashSync(newPassword, 12);
+    db.prepare("UPDATE users SET password=? WHERE id=?").run(hash, data.userId);
+    res.json({ success: true, message: "Password updated successfully. Please log in." });
+  } catch (err) {
+    console.error("[auth reset-password]", err.message);
+    res.status(500).json({ error: "Failed to reset password. Please try again." });
+  }
+});
+
 module.exports = router;
