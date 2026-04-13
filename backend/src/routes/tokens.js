@@ -1,4 +1,5 @@
 "use strict";
+const { sendTokenCalled } = require("../services/whatsapp");
 const express = require("express");
 const db      = require("../db/init");
 const { requireDoctorOrAdmin } = require("../middleware/auth");
@@ -98,6 +99,16 @@ router.post("/:sessionId/regulate", requireDoctorOrAdmin, (req, res) => {
     nextToken = nextRed;
 
     saveState(req.params.sessionId, statuses, state.prioritySlots, currentToken, nextToken, state.isClosed);
+    // Send WhatsApp notification to called patient
+    try {
+      const booking = db.prepare("SELECT b.*, u.phone as uphone FROM bookings b LEFT JOIN users u ON b.patient_id=u.id WHERE b.session_id=? AND b.token_number=? AND b.status!='cancelled' LIMIT 1").get(req.params.sessionId, clicked);
+      if (booking) {
+        const parts = req.params.sessionId.split("_");
+        const doc = db.prepare("SELECT * FROM doctors WHERE id=?").get(parts[0]);
+        const hosp = doc ? db.prepare("SELECT name FROM hospitals WHERE id=?").get(doc.hospital_id) : null;
+        sendTokenCalled({ phone: booking.phone || booking.uphone, patientName: booking.patient_name, tokenNumber: clicked, doctorName: booking.doctor_name, hospitalName: hosp?.name || "" }).catch(() => {});
+      }
+    } catch(_) {}
   });
 });
 

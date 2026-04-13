@@ -5,6 +5,7 @@ const Razorpay = require("razorpay");
 const db       = require("../db/init");
 const { requireAuth } = require("../middleware/auth");
 const { broadcast }   = require("../services/ws");
+const { sendBookingConfirmation } = require("../services/whatsapp");
 
 const router = express.Router();
 
@@ -230,6 +231,14 @@ router.post("/verify", requireAuth, async (req, res) => {
 
     // Broadcast to WebSocket clients
     try {
+    sendBookingConfirmation({
+      phone: booking.phone || patient.phone,
+      patientName: patient.name,
+      doctorName: doctorName || doctor.name,
+      hospitalName: hospitalName || "",
+      date, session,
+      tokenNumber: booking.token_number,
+    }).catch(() => {});
       broadcast(sessionId, { type: "token_booked", tokenNumber: booking.token_number, sessionId });
     } catch (wsErr) {
       console.error("[payments] WS broadcast error:", wsErr.message);
