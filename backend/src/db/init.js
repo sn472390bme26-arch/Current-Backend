@@ -5,29 +5,34 @@ const fs   = require("fs");
 require("dotenv").config();
 
 const DB_PATH = process.env.DB_PATH || "./data/doctor_booked.db";
-const dir = path.dirname(DB_PATH);
+const dir = path.dirname(path.resolve(DB_PATH));
 if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
-const db = new Database(DB_PATH);
+const db = new Database(DB_PATH, {
+  // verbose: process.env.NODE_ENV !== "production" ? console.log : undefined,
+});
 
 // ── Performance & reliability pragmas ────────────────────────────────────────
-db.pragma("journal_mode = WAL");      // concurrent reads during writes
-db.pragma("busy_timeout = 10000");    // wait up to 10s before SQLITE_BUSY
-db.pragma("synchronous = NORMAL");    // safe with WAL, much faster than FULL
-db.pragma("foreign_keys = ON");       // enforce referential integrity
-db.pragma("cache_size = -65536");     // 64MB page cache (reduces disk I/O)
-db.pragma("temp_store = MEMORY");     // keep temp tables in RAM
+db.pragma("journal_mode = WAL");
+db.pragma("busy_timeout = 10000");
+db.pragma("synchronous = NORMAL");
+db.pragma("foreign_keys = ON");
+db.pragma("cache_size = -65536");     // 64MB page cache
+db.pragma("temp_store = MEMORY");
 db.pragma("mmap_size = 268435456");   // 256MB memory-mapped I/O
-db.pragma("wal_autocheckpoint = 1000"); // checkpoint every 1000 pages
+db.pragma("wal_autocheckpoint = 1000");
+db.pragma("optimize");                // let SQLite tune itself
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS users (
-    id          TEXT PRIMARY KEY,
-    email       TEXT UNIQUE,
-    name        TEXT,
-    password    TEXT,
-    role        TEXT NOT NULL CHECK(role IN ('patient','doctor','admin')),
-    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+    id            TEXT PRIMARY KEY,
+    email         TEXT UNIQUE,
+    name          TEXT,
+    password      TEXT,
+    role          TEXT NOT NULL CHECK(role IN ('patient','doctor','admin')),
+    phone         TEXT,
+    phone_verified INTEGER NOT NULL DEFAULT 0,
+    created_at    TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
   CREATE TABLE IF NOT EXISTS hospitals (
@@ -65,22 +70,24 @@ db.exec(`
   );
 
   CREATE TABLE IF NOT EXISTS bookings (
-    id              TEXT PRIMARY KEY,
-    patient_id      TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    patient_name    TEXT NOT NULL,
-    doctor_id       TEXT NOT NULL REFERENCES doctors(id) ON DELETE CASCADE,
-    doctor_name     TEXT NOT NULL,
-    hospital_name   TEXT NOT NULL,
-    date            TEXT NOT NULL,
-    session         TEXT NOT NULL,
-    token_number    INTEGER NOT NULL,
-    session_id      TEXT NOT NULL,
-    payment_done    INTEGER NOT NULL DEFAULT 0,
-    status          TEXT NOT NULL DEFAULT 'confirmed'
-                    CHECK(status IN ('confirmed','completed','unvisited','cancelled')),
-    phone           TEXT,
-    complaint       TEXT,
-    created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+    id                  TEXT PRIMARY KEY,
+    patient_id          TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    patient_name        TEXT NOT NULL,
+    doctor_id           TEXT NOT NULL REFERENCES doctors(id) ON DELETE CASCADE,
+    doctor_name         TEXT NOT NULL,
+    hospital_name       TEXT NOT NULL,
+    date                TEXT NOT NULL,
+    session             TEXT NOT NULL,
+    token_number        INTEGER NOT NULL,
+    session_id          TEXT NOT NULL,
+    payment_done        INTEGER NOT NULL DEFAULT 0,
+    status              TEXT NOT NULL DEFAULT 'confirmed'
+                        CHECK(status IN ('confirmed','completed','unvisited','cancelled')),
+    phone               TEXT,
+    complaint           TEXT,
+    razorpay_order_id   TEXT,
+    razorpay_payment_id TEXT,
+    created_at          TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
   CREATE TABLE IF NOT EXISTS token_states (
@@ -97,6 +104,17 @@ db.exec(`
     updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
+  CREATE TABLE IF NOT EXISTS otp_pending (
+    id          TEXT PRIMARY KEY,
+    phone       TEXT NOT NULL,
+    otp         TEXT NOT NULL,
+    context     TEXT NOT NULL,
+    data        TEXT,
+    expires_at  INTEGER NOT NULL,
+    attempts    INTEGER NOT NULL DEFAULT 0,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
   -- ── Indexes ───────────────────────────────────────────────────────────────
   CREATE INDEX IF NOT EXISTS idx_bookings_patient     ON bookings(patient_id);
   CREATE INDEX IF NOT EXISTS idx_bookings_session     ON bookings(session_id);
@@ -108,12 +126,21 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_token_states_doctor  ON token_states(doctor_id);
   CREATE INDEX IF NOT EXISTS idx_token_states_date    ON token_states(date);
   CREATE INDEX IF NOT EXISTS idx_users_role           ON users(role);
+  CREATE INDEX IF NOT EXISTS idx_users_phone          ON users(phone);
+  CREATE INDEX IF NOT EXISTS idx_otp_phone            ON otp_pending(phone);
+  CREATE INDEX IF NOT EXISTS idx_otp_expires          ON otp_pending(expires_at);
 `);
 
-// ── Pre-compile hot queries for maximum performance ───────────────────────────
-// These are called on every request — compiling once at startup saves ~0.1ms each
+// ── Safe migrations ───────────────────────────────────────────────────────────
+const safeAlter = (sql) => { try { db.prepare(sql).run(); } catch (_) {} };
+safeAlter("ALTER TABLE users ADD COLUMN phone TEXT");
+safeAlter("ALTER TABLE users ADD COLUMN phone_verified INTEGER NOT NULL DEFAULT 0");
+safeAlter("ALTER TABLE bookings ADD COLUMN razorpay_order_id TEXT");
+safeAlter("ALTER TABLE bookings ADD COLUMN razorpay_payment_id TEXT");
+
+// ── Pre-compiled hot queries ──────────────────────────────────────────────────
 db.stmts = {
-  getTokenState:  db.prepare("SELECT * FROM token_states WHERE session_id=?"),
+  getTokenState: db.prepare("SELECT * FROM token_states WHERE session_id=?"),
   updateTokenState: db.prepare(`
     UPDATE token_states SET token_statuses=?, priority_slots=?,
     current_token=?, next_token=?, is_closed=?, updated_at=datetime('now')
@@ -125,32 +152,30 @@ db.stmts = {
   countBookingsForSession: db.prepare(
     "SELECT COUNT(*) as c FROM bookings WHERE session_id=? AND payment_done=1 AND status!='cancelled'"
   ),
+  cleanExpiredOTPs: db.prepare("DELETE FROM otp_pending WHERE expires_at < ?"),
 };
 
-// ── Safe migrations — add new columns without breaking existing data ──────────
-const safeAlter = (sql) => { try { db.prepare(sql).run(); } catch (_) {} };
-safeAlter("ALTER TABLE users ADD COLUMN phone TEXT");
-safeAlter("ALTER TABLE users ADD COLUMN phone_verified INTEGER NOT NULL DEFAULT 0");
-safeAlter("ALTER TABLE bookings ADD COLUMN razorpay_order_id TEXT");
-safeAlter("ALTER TABLE bookings ADD COLUMN razorpay_payment_id TEXT");
+// ── Auto-clean expired OTPs every 10 minutes ─────────────────────────────────
+setInterval(() => {
+  try {
+    const result = db.stmts.cleanExpiredOTPs.run(Date.now());
+    if (result.changes > 0) console.log(`[DB] Cleaned ${result.changes} expired OTPs`);
+  } catch (err) {
+    console.error("[DB] OTP cleanup error:", err.message);
+  }
+}, 10 * 60 * 1000);
 
-// OTP store table — holds pending phone verifications (expires in 10 min)
-db.prepare(`
-  CREATE TABLE IF NOT EXISTS otp_pending (
-    id          TEXT PRIMARY KEY,
-    phone       TEXT NOT NULL,
-    otp         TEXT NOT NULL,
-    context     TEXT NOT NULL,   -- 'signup' | 'google' | 'login'
-    data        TEXT,            -- JSON: email, name, password_hash, etc
-    expires_at  INTEGER NOT NULL,
-    attempts    INTEGER NOT NULL DEFAULT 0,
-    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
-  )
-`).run();
-
-db.prepare(`CREATE INDEX IF NOT EXISTS idx_otp_phone ON otp_pending(phone)`).run();
+// ── WAL checkpoint every 30 minutes to keep file size in check ───────────────
+setInterval(() => {
+  try {
+    db.pragma("wal_checkpoint(PASSIVE)");
+  } catch (err) {
+    console.error("[DB] WAL checkpoint error:", err.message);
+  }
+}, 30 * 60 * 1000);
 
 console.log("✅  Database ready:", path.resolve(DB_PATH));
 console.log("   WAL mode     :", db.pragma("journal_mode", { simple: true }));
 console.log("   Busy timeout :", db.pragma("busy_timeout",  { simple: true }), "ms");
+
 module.exports = db;

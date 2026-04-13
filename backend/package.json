@@ -1,7 +1,7 @@
 {
   "name": "doctor-booked-backend",
   "version": "1.0.0",
-  "description": "Doctor Booked \u2014 production backend API",
+  "description": "Doctor Booked — production backend API",
   "main": "src/index.js",
   "type": "commonjs",
   "scripts": {
@@ -12,19 +12,20 @@
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
+    "better-sqlite3": "^11.1.2",
+    "compression": "^1.8.1",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "express-rate-limit": "^7.3.1",
     "express-validator": "^7.2.0",
-    "jsonwebtoken": "^9.0.2",
-    "multer": "^1.4.5-lts.1",
-    "better-sqlite3": "^11.1.2",
-    "ws": "^8.18.0",
-    "helmet": "^7.1.0",
-    "morgan": "^1.10.0",
     "google-auth-library": "^9.14.1",
-    "razorpay": "^2.9.2"
+    "helmet": "^7.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "morgan": "^1.10.0",
+    "multer": "^1.4.5-lts.1",
+    "razorpay": "^2.9.2",
+    "ws": "^8.18.0"
   },
   "devDependencies": {
     "nodemon": "^3.1.4"

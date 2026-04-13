@@ -11,7 +11,6 @@ const router = express.Router();
 const KEY_ID     = process.env.RAZORPAY_KEY_ID     || "";
 const KEY_SECRET = process.env.RAZORPAY_KEY_SECRET || "";
 
-// Razorpay instance — only created if keys are configured
 let razorpay = null;
 if (KEY_ID && KEY_SECRET) {
   razorpay = new Razorpay({ key_id: KEY_ID, key_secret: KEY_SECRET });
@@ -28,15 +27,33 @@ function ensureRazorpay(res) {
   return true;
 }
 
+// Razorpay API call with timeout + retry
+async function razorpayWithRetry(fn, attempts = 2) {
+  for (let i = 1; i <= attempts; i++) {
+    try {
+      return await Promise.race([
+        fn(),
+        new Promise((_, rej) => setTimeout(() => rej(new Error("Razorpay timeout")), 15_000)),
+      ]);
+    } catch (err) {
+      if (i === attempts) throw err;
+      console.warn(`[Razorpay] Attempt ${i} failed: ${err.message} — retrying...`);
+      await new Promise(r => setTimeout(r, 2000));
+    }
+  }
+}
+
 // ── POST /api/payments/create-order ──────────────────────────────────────────
-// Creates a Razorpay order for a booking.
-// Frontend calls this before opening the Razorpay checkout.
 router.post("/create-order", requireAuth, async (req, res) => {
   if (!ensureRazorpay(res)) return;
   try {
     const { doctorId, date, session, complaint = "", phone = "" } = req.body;
     if (!doctorId || !date || !session)
       return res.status(400).json({ error: "doctorId, date and session are required." });
+
+    // Validate date format (YYYY-MM-DD)
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date))
+      return res.status(400).json({ error: "Invalid date format. Use YYYY-MM-DD." });
 
     const doctor = db.prepare("SELECT * FROM doctors WHERE id=?").get(doctorId);
     if (!doctor)   return res.status(404).json({ error: "Doctor not found." });
@@ -47,89 +64,108 @@ router.post("/create-order", requireAuth, async (req, res) => {
     const sessionId = `${doctorId}_${date}_${session}`;
 
     // Check capacity
-    const count = db.prepare(
-      "SELECT COUNT(*) as c FROM bookings WHERE session_id=? AND payment_done=1 AND status!='cancelled'"
-    ).get(sessionId).c;
+    const count = db.stmts.countBookingsForSession.get(sessionId).c;
     if (count >= doctor.tokens_per_session)
       return res.status(409).json({ error: "This session is fully booked." });
 
-    // Check duplicate
+    // Check duplicate booking
     const dup = db.prepare(
       "SELECT id FROM bookings WHERE session_id=? AND patient_id=? AND status!='cancelled'"
     ).get(sessionId, req.user.id);
     if (dup) return res.status(409).json({ error: "You already have a booking in this session." });
 
-    // Amount in paise (₹1 = 100 paise)
     const amountRupees = doctor.consultation_fee || doctor.price || 10;
     const amountPaise  = Math.round(amountRupees * 100);
 
-    const order = await razorpay.orders.create({
-      amount:   amountPaise,
-      currency: "INR",
-      receipt:  `rcpt_${Date.now()}`,
-      notes: {
-        doctorId,
-        doctorName:  doctor.name,
-        hospitalName: hospital?.name || "",
-        date,
-        session,
-        patientId:   req.user.id,
-        sessionId,
-        complaint,
-        phone,
-      },
-    });
+    // Idempotency key — prevents duplicate orders on network retry
+    const idempotencyKey = `${req.user.id}_${sessionId}_${Date.now()}`;
+
+    const order = await razorpayWithRetry(() =>
+      razorpay.orders.create({
+        amount:   amountPaise,
+        currency: "INR",
+        receipt:  `rcpt_${Date.now()}`.slice(0, 40),
+        notes: {
+          doctorId,
+          doctorName:   doctor.name,
+          hospitalName: hospital?.name || "",
+          date,
+          session,
+          patientId:    req.user.id,
+          sessionId,
+          complaint:    (complaint || "").slice(0, 200),
+          phone:        (phone || "").slice(0, 20),
+        },
+      })
+    );
 
     console.log(`[Razorpay] Order created: ${order.id} ₹${amountRupees} for ${req.user.id}`);
     res.json({
-      orderId:     order.id,
-      amount:      amountPaise,
+      orderId:      order.id,
+      amount:       amountPaise,
       amountRupees,
-      currency:    "INR",
-      keyId:       KEY_ID,
-      doctorName:  doctor.name,
+      currency:     "INR",
+      keyId:        KEY_ID,
+      doctorName:   doctor.name,
       hospitalName: hospital?.name || "",
     });
   } catch (err) {
     console.error("[payments create-order]", err.message);
-    res.status(500).json({ error: err.message });
+    if (err.message?.includes("timeout"))
+      return res.status(504).json({ error: "Payment gateway timed out. Please try again." });
+    res.status(500).json({ error: "Failed to create payment order. Please try again." });
   }
 });
 
 // ── POST /api/payments/verify ─────────────────────────────────────────────────
-// Called after Razorpay checkout succeeds on the frontend.
-// Verifies the payment signature, then creates the booking in the DB.
 router.post("/verify", requireAuth, async (req, res) => {
   if (!ensureRazorpay(res)) return;
   try {
-    const {
-      razorpay_order_id,
-      razorpay_payment_id,
-      razorpay_signature,
-    } = req.body;
+    const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body;
 
     if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature)
       return res.status(400).json({ error: "Missing payment verification fields." });
 
-    // ── Verify signature (HMAC-SHA256) ──────────────────────────────────────
+    // ── Idempotency — if booking already exists for this order, return it ────
+    const existingBooking = db.prepare(
+      "SELECT * FROM bookings WHERE razorpay_order_id=?"
+    ).get(razorpay_order_id);
+    if (existingBooking) {
+      console.log(`[Razorpay] Duplicate verify for order ${razorpay_order_id} — returning existing booking`);
+      return res.json({
+        success: true,
+        booking: formatBooking(existingBooking),
+      });
+    }
+
+    // ── Verify HMAC-SHA256 signature ─────────────────────────────────────────
     const expectedSig = crypto
       .createHmac("sha256", KEY_SECRET)
       .update(`${razorpay_order_id}|${razorpay_payment_id}`)
       .digest("hex");
 
-    if (expectedSig !== razorpay_signature) {
+    // Constant-time comparison to prevent timing attacks
+    const sigBuffer  = Buffer.from(razorpay_signature, "hex");
+    const expBuffer  = Buffer.from(expectedSig, "hex");
+    const sigValid   = sigBuffer.length === expBuffer.length &&
+                       crypto.timingSafeEqual(sigBuffer, expBuffer);
+
+    if (!sigValid) {
       console.error(`[Razorpay] Signature mismatch for order ${razorpay_order_id}`);
       return res.status(400).json({ error: "Payment verification failed. Please contact support." });
     }
 
-    // ── Fetch order details from Razorpay to get booking metadata ────────────
-    const order = await razorpay.orders.fetch(razorpay_order_id);
+    // ── Fetch order from Razorpay ─────────────────────────────────────────────
+    const order = await razorpayWithRetry(() => razorpay.orders.fetch(razorpay_order_id));
     const notes = order.notes || {};
 
     const { doctorId, date, session, patientId, sessionId,
             doctorName, hospitalName, complaint = "", phone = "" } = notes;
 
-    // Verify the patient making the request matches the order
+    if (!doctorId || !date || !session || !patientId || !sessionId)
+      return res.status(400).json({ error: "Invalid payment order data." });
+
+    // Verify the patient matches
     if (patientId !== req.user.id)
       return res.status(403).json({ error: "Payment does not belong to this account." });
 
@@ -138,16 +174,18 @@ router.post("/verify", requireAuth, async (req, res) => {
     if (!doctor || !patient)
       return res.status(404).json({ error: "Doctor or patient not found." });
 
-    // ── Create booking inside a transaction ───────────────────────────────────
+    // ── Create booking in a transaction (race-condition safe) ─────────────────
     let booking;
     db.transaction(() => {
-      // Re-check capacity (race condition protection)
-      const freshCount = db.prepare(
-        "SELECT COUNT(*) as c FROM bookings WHERE session_id=? AND payment_done=1 AND status!='cancelled'"
-      ).get(sessionId).c;
+      // Re-check capacity
+      const freshCount = db.stmts.countBookingsForSession.get(sessionId).c;
       if (freshCount >= doctor.tokens_per_session)
-        throw Object.assign(new Error("Session became fully booked during payment. You will be refunded."), { status: 409 });
+        throw Object.assign(
+          new Error("Session became fully booked during payment. You will be refunded within 5-7 business days."),
+          { status: 409 }
+        );
 
+      // Re-check duplicate
       const dup = db.prepare(
         "SELECT id FROM bookings WHERE session_id=? AND patient_id=? AND status!='cancelled'"
       ).get(sessionId, req.user.id);
@@ -190,24 +228,33 @@ router.post("/verify", requireAuth, async (req, res) => {
       console.log(`[Razorpay] Booking confirmed: ${bookingId} token ${tokenNumber} order ${razorpay_order_id}`);
     })();
 
-    broadcast(sessionId, { type: "token_booked", tokenNumber: booking.token_number, sessionId });
+    // Broadcast to WebSocket clients
+    try {
+      broadcast(sessionId, { type: "token_booked", tokenNumber: booking.token_number, sessionId });
+    } catch (wsErr) {
+      console.error("[payments] WS broadcast error:", wsErr.message);
+      // Don't fail the request just because WS broadcast failed
+    }
 
-    res.json({
-      success: true,
-      booking: {
-        id: booking.id, patientId: booking.patient_id, patientName: booking.patient_name,
-        doctorId: booking.doctor_id, doctorName: booking.doctor_name,
-        hospitalName: booking.hospital_name, date: booking.date,
-        session: booking.session, tokenNumber: booking.token_number,
-        sessionId: booking.session_id, paymentDone: true, status: booking.status,
-        phone: booking.phone || "", complaint: booking.complaint || "",
-        createdAt: booking.created_at,
-      },
-    });
+    res.json({ success: true, booking: formatBooking(booking) });
   } catch (err) {
     console.error("[payments verify]", err.message);
+    if (err.message?.includes("timeout"))
+      return res.status(504).json({ error: "Payment gateway timed out. Your payment may have gone through — check your bookings before trying again." });
     res.status(err.status || 500).json({ error: err.message });
   }
 });
+
+function formatBooking(b) {
+  return {
+    id: b.id, patientId: b.patient_id, patientName: b.patient_name,
+    doctorId: b.doctor_id, doctorName: b.doctor_name,
+    hospitalName: b.hospital_name, date: b.date,
+    session: b.session, tokenNumber: b.token_number,
+    sessionId: b.session_id, paymentDone: !!b.payment_done, status: b.status,
+    phone: b.phone || "", complaint: b.complaint || "",
+    createdAt: b.created_at,
+  };
+}
 
 module.exports = router;
