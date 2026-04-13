@@ -77,32 +77,13 @@ router.post("/patient/login",
       if (!user) return res.status(401).json({ error: "No account found with this phone number." });
       if (!bcrypt.compareSync(password, user.password)) return res.status(401).json({ error: "Incorrect password." });
 
-      // Old account without phone — log in directly
-      if (!user.phone || !user.phone_verified) {
-        return res.json({
-          token: sign({ id: user.id, email: user.email, name: user.name, role: "patient" }),
-          user:  { id: user.id, email: user.email, name: user.name, role: "patient" },
-          needsPhone: true,
-        });
-      }
+      // Direct login — no OTP after signup
+return res.json({
+  token: sign({ id: user.id, email: user.email, name: user.name, role: "patient" }),
+  user:  { id: user.id, email: user.email, name: user.name, role: "patient" },
+});
 
-      const otp       = generateOTP();
-      const otpId     = `otp_${Date.now()}_${Math.random().toString(36).slice(2,7)}`;
-      const expiresAt = Date.now() + 10 * 60 * 1000;
 
-      db.prepare("DELETE FROM otp_pending WHERE phone=? AND context='login'").run(user.phone);
-      db.prepare(`
-        INSERT INTO otp_pending (id, phone, otp, context, data, expires_at)
-        VALUES (?,?,?,'login',?,?)
-      `).run(otpId, user.phone, otp, JSON.stringify({ userId: user.id }), expiresAt);
-
-      await sendOTP(user.phone, otp);
-
-      const resp = { success: true, otpId,
-                     maskedPhone: `+${user.phone.slice(0,2)}XXXXX${user.phone.slice(-4)}`,
-                     message: `OTP sent to your registered phone.` };
-      if (IS_DEV) resp.devOtp = otp;
-      res.json(resp);
     } catch (err) {
       console.error("[auth login]", err.message);
       res.status(500).json({ error: err.message });
