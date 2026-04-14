@@ -1,24 +1,11 @@
 "use strict";
-/**
- * sms.js — MSG91 OTP sender with retry + timeout
- *
- * ENV VARS:
- *   MSG91_AUTH_KEY    — your MSG91 API auth key
- *   MSG91_TEMPLATE_ID — OTP template ID from MSG91 dashboard
- *   MSG91_SENDER_ID   — 6-char sender (default: DOCBKD)
- */
 
 const IS_DEV = !process.env.MSG91_AUTH_KEY;
 
 function generateOTP() {
-  // Cryptographically random 6-digit OTP
-  const array = new Uint32Array(1);
-  // Use Math.random as fallback since crypto.getRandomValues may not exist in all Node versions
-  const rand = Math.floor(Math.random() * 900000) + 100000;
-  return String(rand);
+  return String(Math.floor(Math.random() * 900000) + 100000);
 }
 
-// Normalise phone → 91XXXXXXXXXX (no + sign, with country code)
 function normalisePhone(raw) {
   const digits = String(raw).replace(/\D/g, "");
   if (digits.startsWith("91") && digits.length === 12) return digits;
@@ -27,10 +14,9 @@ function normalisePhone(raw) {
   return digits;
 }
 
-// Fetch with timeout helper
 async function fetchWithTimeout(url, opts, ms = 10000) {
   const ctrl = new AbortController();
-  const id   = setTimeout(() => ctrl.abort(), ms);
+  const id = setTimeout(() => ctrl.abort(), ms);
   try {
     return await fetch(url, { ...opts, signal: ctrl.signal });
   } finally {
@@ -48,7 +34,7 @@ async function sendOTP(phone, otp, attempt = 1) {
   const templateId = process.env.MSG91_TEMPLATE_ID;
   const senderId   = process.env.MSG91_SENDER_ID || "DOCBKD";
 
-  if (!templateId) throw new Error("MSG91_TEMPLATE_ID is not set in environment variables.");
+  if (!templateId) throw new Error("MSG91_TEMPLATE_ID is not set.");
 
   try {
     const res = await fetchWithTimeout(
@@ -63,27 +49,27 @@ async function sendOTP(phone, otp, attempt = 1) {
           template_id: templateId,
           mobile:      phone,
           authkey:     authKey,
-          otp,
+          otp:         otp,
+          sender:      senderId,
         }),
       },
-      10_000 // 10s timeout per attempt
+      10_000
     );
 
     const data = await res.json().catch(() => ({}));
-
+    console.log(`[SMS/MSG91] Response:`, JSON.stringify(data));
+    
     if (!res.ok || data.type === "error") {
       throw new Error(data.message || `MSG91 error ${res.status}`);
     }
 
     console.log(`[SMS/MSG91] OTP sent to +${phone}`);
   } catch (err) {
-    // Retry once on network/timeout errors
     if (attempt < 2 && (err.name === "AbortError" || err.message?.includes("fetch"))) {
       console.warn(`[SMS] Attempt ${attempt} failed, retrying...`);
       await new Promise(r => setTimeout(r, 2000));
       return sendOTP(phone, otp, attempt + 1);
     }
-
     if (err.name === "AbortError") {
       throw new Error("OTP service timed out. Please try again.");
     }
