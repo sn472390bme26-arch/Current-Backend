@@ -1,6 +1,10 @@
 "use strict";
 
 const IS_DEV = !process.env.MSG91_AUTH_KEY;
+const INTEGRATED_NUM = "918072966876";
+const NAMESPACE      = "530143de_af61_4573_8407_9afd9b2e279b";
+const WA_API_URL     = "https://api.msg91.com/api/v5/whatsapp/whatsapp-outbound-message/bulk/";
+const WA_TEMPLATE    = "otp_verification"; // we'll create this template
 
 function generateOTP() {
   return String(Math.floor(Math.random() * 900000) + 100000);
@@ -26,19 +30,15 @@ async function fetchWithTimeout(url, opts, ms = 10000) {
 
 async function sendOTP(phone, otp, attempt = 1) {
   if (IS_DEV) {
-    console.log(`\n📱 [SMS/DEV] OTP for +${phone} → ${otp}\n`);
+    console.log(`\n📱 [WhatsApp/DEV] OTP for +${phone} → ${otp}\n`);
     return;
   }
 
-  const authKey    = process.env.MSG91_AUTH_KEY;
-  const templateId = process.env.MSG91_TEMPLATE_ID;
-  const senderId   = process.env.MSG91_SENDER_ID || "DOCBKD";
-
-  if (!templateId) throw new Error("MSG91_TEMPLATE_ID is not set.");
+  const authKey = process.env.MSG91_AUTH_KEY;
 
   try {
     const res = await fetchWithTimeout(
-      "https://control.msg91.com/api/v5/otp",
+      WA_API_URL,
       {
         method: "POST",
         headers: {
@@ -46,27 +46,38 @@ async function sendOTP(phone, otp, attempt = 1) {
           "authkey": authKey,
         },
         body: JSON.stringify({
-          template_id: templateId,
-          mobile:      phone,
-          authkey:     authKey,
-          otp:         otp,
-          sender:      senderId,
+          integrated_number: INTEGRATED_NUM,
+          content_type: "template",
+          payload: {
+            messaging_product: "whatsapp",
+            type: "template",
+            template: {
+              name: WA_TEMPLATE,
+              language: { code: "en", policy: "deterministic" },
+              namespace: NAMESPACE,
+              to_and_components: [
+                {
+                  to: [phone],
+                  components: {
+                    body_1: { type: "text", value: otp },
+                  },
+                },
+              ],
+            },
+          },
         }),
       },
       10_000
     );
 
     const data = await res.json().catch(() => ({}));
-    console.log(`[SMS/MSG91] Response:`, JSON.stringify(data));
-    
-    if (!res.ok || data.type === "error") {
-      throw new Error(data.message || `MSG91 error ${res.status}`);
-    }
+    console.log(`[WhatsApp/OTP] Response:`, JSON.stringify(data));
 
-    console.log(`[SMS/MSG91] OTP sent to +${phone}`);
+    if (!res.ok) throw new Error(data.message || `MSG91 WhatsApp error ${res.status}`);
+    console.log(`[WhatsApp/OTP] OTP sent to +${phone}`);
   } catch (err) {
     if (attempt < 2 && (err.name === "AbortError" || err.message?.includes("fetch"))) {
-      console.warn(`[SMS] Attempt ${attempt} failed, retrying...`);
+      console.warn(`[WhatsApp/OTP] Attempt ${attempt} failed, retrying...`);
       await new Promise(r => setTimeout(r, 2000));
       return sendOTP(phone, otp, attempt + 1);
     }
