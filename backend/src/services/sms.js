@@ -2,9 +2,7 @@
 
 const IS_DEV = !process.env.MSG91_AUTH_KEY;
 const INTEGRATED_NUM = "918072966876";
-const NAMESPACE      = "530143de_af61_4573_8407_9afd9b2e279b";
-const WA_API_URL     = "https://api.msg91.com/api/v5/whatsapp/whatsapp-outbound-message/bulk/";
-const WA_TEMPLATE    = "otp_verification"; // we'll create this template
+const WA_API_URL = "https://api.msg91.com/api/v5/whatsapp/whatsapp-outbound-message/bulk/";
 
 function generateOTP() {
   return String(Math.floor(Math.random() * 900000) + 100000);
@@ -52,14 +50,15 @@ async function sendOTP(phone, otp, attempt = 1) {
             messaging_product: "whatsapp",
             type: "template",
             template: {
-              name: WA_TEMPLATE,
+              name: "otp_verification",
               language: { code: "en", policy: "deterministic" },
-              namespace: NAMESPACE,
+              namespace: null,
               to_and_components: [
                 {
                   to: [phone],
                   components: {
                     body_1: { type: "text", value: otp },
+                    button_1: { subtype: "url", type: "text", value: otp },
                   },
                 },
               ],
@@ -73,7 +72,7 @@ async function sendOTP(phone, otp, attempt = 1) {
     const data = await res.json().catch(() => ({}));
     console.log(`[WhatsApp/OTP] Response:`, JSON.stringify(data));
 
-    if (!res.ok) throw new Error(data.message || `MSG91 WhatsApp error ${res.status}`);
+    if (!res.ok) throw new Error(data.message || `MSG91 error ${res.status}`);
     console.log(`[WhatsApp/OTP] OTP sent to +${phone}`);
   } catch (err) {
     if (attempt < 2 && (err.name === "AbortError" || err.message?.includes("fetch"))) {
@@ -81,9 +80,7 @@ async function sendOTP(phone, otp, attempt = 1) {
       await new Promise(r => setTimeout(r, 2000));
       return sendOTP(phone, otp, attempt + 1);
     }
-    if (err.name === "AbortError") {
-      throw new Error("OTP service timed out. Please try again.");
-    }
+    if (err.name === "AbortError") throw new Error("OTP service timed out. Please try again.");
     throw err;
   }
 }

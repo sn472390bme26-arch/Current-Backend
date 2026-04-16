@@ -2,13 +2,12 @@
 
 const AUTH_KEY       = process.env.MSG91_AUTH_KEY || "";
 const INTEGRATED_NUM = "918072966876";
-const NAMESPACE      = "530143de_af61_4573_8407_9afd9b2e279b";
 const API_URL        = "https://api.msg91.com/api/v5/whatsapp/whatsapp-outbound-message/bulk/";
-const IS_DEV = !AUTH_KEY;
+const IS_DEV         = !AUTH_KEY;
 
-async function sendWhatsApp(phone, templateName, components, namespace) {
+async function sendWhatsApp(phone, templateName, components) {
   if (IS_DEV) {
-    console.log(`\n📱 [WhatsApp/DEV] To: +${phone} Template: ${templateName}\n`);
+    console.log(`\n📱 [WhatsApp/DEV] To: +${phone} Template: ${templateName}\n`, components);
     return;
   }
   try {
@@ -24,13 +23,14 @@ async function sendWhatsApp(phone, templateName, components, namespace) {
           template: {
             name: templateName,
             language: { code: "en", policy: "deterministic" },
-            namespace: namespace || null,
+            namespace: null,
             to_and_components: [{ to: [phone], components }],
           },
         },
       }),
     });
     const data = await res.json().catch(() => ({}));
+    console.log(`[WhatsApp/${templateName}] Response:`, JSON.stringify(data));
     if (!res.ok) throw new Error(data.message || `MSG91 error ${res.status}`);
     console.log(`[WhatsApp] Sent ${templateName} to +${phone}`);
   } catch (err) {
@@ -49,7 +49,7 @@ async function sendBookingConfirmation({ phone, patientName, doctorName, hospita
     body_4: { type: "text", value: date },
     body_5: { type: "text", value: session.charAt(0).toUpperCase() + session.slice(1) },
     body_6: { type: "text", value: String(tokenNumber) },
-  }, NAMESPACE);
+  });
 }
 
 async function sendTokenCalled({ phone, patientName, tokenNumber, doctorName, hospitalName }) {
@@ -61,7 +61,7 @@ async function sendTokenCalled({ phone, patientName, tokenNumber, doctorName, ho
     body_2: { type: "text", value: String(tokenNumber) },
     body_3: { type: "text", value: doctorName },
     body_4: { type: "text", value: hospitalName },
-  }, null);
+  });
 }
 
 module.exports = { sendBookingConfirmation, sendTokenCalled };
