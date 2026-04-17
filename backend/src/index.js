@@ -67,10 +67,23 @@ app.use(helmet({
 // ── CORS ──────────────────────────────────────────────────────────────────────
 const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(",").map(o => o.trim())
-  : true; // allow all in dev
+  : null; // allow all in dev when env var is not set
+
+const isCodespacesOrigin = (origin = "") => {
+  // Example: https://my-space-4000.app.github.dev
+  return /^https:\/\/[a-z0-9-]+-\d+\.app\.github\.dev$/i.test(origin);
+};
 
 const corsOptions = {
-  origin: ALLOWED_ORIGINS,
+  origin: (origin, callback) => {
+    // Allow server-to-server/health checks without Origin header.
+    if (!origin) return callback(null, true);
+    if (!ALLOWED_ORIGINS) return callback(null, true);
+    if (ALLOWED_ORIGINS.includes(origin) || isCodespacesOrigin(origin)) {
+      return callback(null, true);
+    }
+    return callback(new Error("CORS origin not allowed"));
+  },
   credentials: true,
   methods: ["GET","POST","PATCH","PUT","DELETE","OPTIONS"],
   allowedHeaders: ["Content-Type","Authorization","X-Requested-With"],

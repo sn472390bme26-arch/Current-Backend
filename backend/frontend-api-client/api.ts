@@ -6,7 +6,8 @@
  */
 
 const BASE = import.meta.env.VITE_API_URL || "http://localhost:4000/api";
-const WS_BASE = (import.meta.env.VITE_API_URL || "http://localhost:4000")
+const WS_BASE = BASE
+  .replace(/\/api\/?$/, "")
   .replace(/^http/, "ws");
 
 // ── Token storage ─────────────────────────────────────────────────────────────
