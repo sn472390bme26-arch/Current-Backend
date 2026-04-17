@@ -524,6 +524,12 @@ router.post(
         });
       }
 
+      if (!mailTransporter) {
+        return res.status(503).json({
+          error: "Password reset email service is not configured. Please try again later.",
+        });
+      }
+
       const resetToken = jwt.sign(
         { id: user.id, role: "patient", purpose: "reset-password" },
         SECRET,
