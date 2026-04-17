@@ -266,4 +266,21 @@ function formatBooking(b) {
   };
 }
 
+
+async function refundBooking(bookingId) {
+  if (!razorpay) { console.warn("[Refund] Razorpay not configured", bookingId); return; }
+  try {
+    const booking = db.prepare("SELECT * FROM bookings WHERE id=?").get(bookingId);
+    if (!booking) { console.warn("[Refund] Booking not found:", bookingId); return; }
+    if (!booking.razorpay_payment_id) { console.warn("[Refund] No payment ID:", bookingId); return; }
+    if (booking.refund_id) { console.warn("[Refund] Already refunded:", bookingId); return; }
+    const payment = await razorpayWithRetry(() => razorpay.payments.fetch(booking.razorpay_payment_id));
+    const refund = await razorpayWithRetry(() => razorpay.payments.refund(booking.razorpay_payment_id, { amount: payment.amount, speed: "optimum", notes: { bookingId, reason: "Session cancelled or patient unavailable" } }));
+    db.prepare("UPDATE bookings SET refund_id=?, status='refunded' WHERE id=?").run(refund.id, bookingId);
+    console.log("[Refund] Refunded booking", bookingId, "refund ID:", refund.id);
+  } catch(err) {
+    console.error("[Refund] Failed for booking", bookingId, err.message);
+  }
+}
 module.exports = router;
+module.exports.refundBooking = refundBooking;

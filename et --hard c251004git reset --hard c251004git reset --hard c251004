@@ -1,0 +1,65 @@
+[33mcommit 1f269379ac80ed6086eb70ee07f809710c46618f[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m)[m
+Author: Senthil Nathan <doctorbookedsn1@gmail.com>
+Date:   Thu Apr 16 16:32:10 2026 +0000
+
+    Token cancelled appearing message
+
+[33mcommit c2510044531572a4e10aa54bb551f05cdf619457[m
+Author: Senthil Nathan <doctorbookedsn1@gmail.com>
+Date:   Thu Apr 16 04:43:32 2026 +0000
+
+    Whatsapp config
+
+[33mcommit 090dca81eb198845fb8459ae0adca1dd4d279140[m
+Author: Senthil Nathan <doctorbookedsn1@gmail.com>
+Date:   Tue Apr 14 04:10:48 2026 +0000
+
+    feat: switch OTP delivery to WhatsApp
+
+[33mcommit c58b781474e63f25aacb87b4dc903044deab5140[m
+Author: Senthil Nathan <doctorbookedsn1@gmail.com>
+Date:   Tue Apr 14 03:12:53 2026 +0000
+
+    fix: add sender to MSG91 OTP request and log response
+
+[33mcommit 3f08508430b45e18bba6a1989830578390923e0b[m
+Author: Senthil Nathan <doctorbookedsn1@gmail.com>
+Date:   Mon Apr 13 12:38:00 2026 +0000
+
+    feat: WhatsApp notifications for booking confirmation and token called
+
+[33mcommit 4a8761c68a1dd9c76fa222b371db7e0d2469a471[m
+Author: Senthil Nathan <doctorbookedsn1@gmail.com>
+Date:   Mon Apr 13 09:12:53 2026 +0000
+
+    feat: add forgot-password and reset-password routes
+
+[33mcommit cdc3aeed61dbbe4f972e5773bebb7d5b1c7d47bb[m
+Author: Senthil Nathan <doctorbookedsn1@gmail.com>
+Date:   Mon Apr 13 08:23:20 2026 +0000
+
+    fix: direct login, skip OTP after signup
+
+[33mcommit 54dca9e70d4760e299f9caaa601b0abd78150ebf[m
+Author: Senthil Nathan <doctorbookedsn1@gmail.com>
+Date:   Mon Apr 13 07:29:19 2026 +0000
+
+    fix: add ADMIN_PASSWORD env support
+
+[33mcommit 8f60bbbb9f075c2820220c5f380b999ce61791c1[m
+Author: Senthil Nathan <doctorbookedsn1@gmail.com>
+Date:   Mon Apr 13 06:18:35 2026 +0000
+
+    Changed the code into a strong one
+
+[33mcommit 9d158e00021b17b95e8402ddd714be21eddf1d00[m
+Author: Senthil <senthil@example.com>
+Date:   Sun Apr 12 22:12:11 2026 -0700
+
+    fix: remove email from signup completely
+
+[33mcommit 35401d2a55c10e09dc10f4e631898f5b6054a510[m
+Author: Senthil <senthil@example.com>
+Date:   Sun Apr 12 21:43:22 2026 -0700
+
+    feat: switch patient login from email to phone number

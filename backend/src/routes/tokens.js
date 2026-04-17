@@ -1,4 +1,5 @@
 "use strict";
+const { refundBooking } = require("./payments");
 const { sendTokenCalled } = require("../services/whatsapp");
 const express = require("express");
 const db      = require("../db/init");
@@ -172,9 +173,13 @@ router.post("/:sessionId/skip", requireDoctorOrAdmin, (req, res) => {
 
     // Mark the skipped patient's booking as 'unvisited' — refund eligible
     if (skippedToken !== null) {
+      const skipBooking = db.prepare(
+        "SELECT id FROM bookings WHERE session_id=? AND token_number=? AND status='confirmed'"
+      ).get(req.params.sessionId, skippedToken);
       db.prepare(
         "UPDATE bookings SET status='unvisited' WHERE session_id=? AND token_number=? AND status='confirmed'"
       ).run(req.params.sessionId, skippedToken);
+      if (skipBooking) refundBooking(skipBooking.id).catch(() => {});
     }
   });
 });
@@ -203,8 +208,12 @@ router.post("/:sessionId/close", requireDoctorOrAdmin, (req, res) => {
       if (s === "red" || s === "yellow") statuses[Number(n)] = "unvisited";
 
     saveState(req.params.sessionId, statuses, state.prioritySlots, null, null, true);
+    const closeBookings = db.prepare(
+      "SELECT id FROM bookings WHERE session_id=? AND status='confirmed'"
+    ).all(req.params.sessionId);
     db.prepare("UPDATE bookings SET status='unvisited' WHERE session_id=? AND status='confirmed'")
       .run(req.params.sessionId);
+    for (const b of closeBookings) refundBooking(b.id).catch(() => {});
   });
 });
 
@@ -239,6 +248,12 @@ router.post("/cancel-session", requireDoctorOrAdmin, (req, res) => {
       }
     })();
 
+    const cancelBookings = db.prepare(
+      "SELECT id FROM bookings WHERE session_id=? AND status='confirmed' AND payment_done=1"
+    ).all(key);
+    db.prepare("UPDATE bookings SET status='cancelled' WHERE session_id=? AND status='confirmed'")
+      .run(key);
+    for (const b of cancelBookings) refundBooking(b.id).catch(() => {});
     res.json({ success: true, cancelledKey: key });
   } catch (err) {
     console.error("[tokens cancel-session]", err.message);
