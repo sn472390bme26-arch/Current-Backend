@@ -7,6 +7,9 @@ const { body, validationResult } = require("express-validator");
 const { OAuth2Client } = require("google-auth-library");
 const db = require("../db/init");
 const { sendOTP, generateOTP, normalisePhone, IS_DEV } = require("../services/sms");
+const { Resend } = require("resend");
+
+const resend = new Resend(process.env.RESEND_API_KEY);
 
 const router = express.Router();
 
@@ -17,24 +20,6 @@ const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "";
 const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173";
 
 const googleClient = GOOGLE_CLIENT_ID ? new OAuth2Client(GOOGLE_CLIENT_ID) : null;
-
-let mailTransporter = null;
-try {
-  const nodemailer = require("nodemailer");
-  if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
-    mailTransporter = nodemailer.createTransport({
-      host: process.env.SMTP_HOST,
-      port: Number(process.env.SMTP_PORT || 587),
-      secure: String(process.env.SMTP_SECURE || "false") === "true",
-      auth: {
-        user: process.env.SMTP_USER,
-        pass: process.env.SMTP_PASS,
-      },
-    });
-  }
-} catch {
-  mailTransporter = null;
-}
 
 function sign(payload) {
   return jwt.sign(payload, SECRET, { expiresIn: EXPIRES });
@@ -58,35 +43,37 @@ function isLikelyEmail(value) {
 }
 
 async function sendResetPasswordEmail(toEmail, name, resetLink) {
-  const fromEmail =
-    process.env.MAIL_FROM ||
-    process.env.SMTP_USER ||
-    "no-reply@doctorbooked.local";
-
   const safeName = name || "there";
-  const subject = "Reset your Doctor Booked password";
-  const text =
-    `Hi ${safeName},\n\n` +
-    `Use the link below to reset your password:\n${resetLink}\n\n` +
-    `This link expires in 30 minutes.`;
 
-  if (mailTransporter) {
-    await mailTransporter.sendMail({
-      from: fromEmail,
+  try {
+    await resend.emails.send({
+      from: "Doctor Booked <noreply@doctorbooked.in>",
       to: toEmail,
-      subject,
-      text,
-      html:
-        `<p>Hi ${safeName},</p>` +
-        `<p>Use the link below to reset your password:</p>` +
-        `<p><a href="${resetLink}">${resetLink}</a></p>` +
-        `<p>This link expires in 30 minutes.</p>`,
+      subject: "Reset your Doctor Booked password",
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 12px;">
+          <div style="text-align: center; margin-bottom: 24px;">
+            <h2 style="color: #14b8a6; margin: 0;">Doctor Booked</h2>
+          </div>
+          <p style="color: #111827;">Hi ${safeName},</p>
+          <p style="color: #374151;">We received a request to reset your password. Click the button below to set a new password:</p>
+          <div style="text-align: center; margin: 32px 0;">
+            <a href="${resetLink}"
+              style="background-color: #14b8a6; color: white; padding: 12px 28px; border-radius: 999px; text-decoration: none; font-weight: 600; display: inline-block;">
+              Reset Password
+            </a>
+          </div>
+          <p style="color: #6b7280; font-size: 13px;">This link expires in <strong>30 minutes</strong>. If you didn't request a password reset, you can safely ignore this email.</p>
+          <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 24px 0;" />
+          <p style="color: #9ca3af; font-size: 12px; text-align: center;">Doctor Booked &mdash; Skip the waiting room.</p>
+        </div>
+      `,
     });
-    return;
+    console.log(`[auth forgot-password] Reset email sent to ${toEmail}`);
+  } catch (err) {
+    console.error(`[auth forgot-password] Resend error:`, err.message);
+    throw new Error("Failed to send reset email. Please try again.");
   }
-
-  // Dev fallback so flow still works without SMTP setup.
-  console.log(`[auth forgot-password] SMTP not configured. Reset link for ${toEmail}: ${resetLink}`);
 }
 
 // ── Patient Signup — email/password ──────────────────────────────────────────
@@ -136,7 +123,7 @@ router.post(
   }
 );
 
-// ── Patient Login — email/password (phone fallback supported) ────────────────
+// ── Patient Login — email/password ───────────────────────────────────────────
 router.post(
   "/patient/login",
   [
@@ -158,13 +145,11 @@ router.post(
 
       let user = null;
 
-      // Primary: email login
       if (isLikelyEmail(identifier)) {
         user = db
           .prepare("SELECT * FROM users WHERE email=? AND role='patient'")
           .get(identifier.toLowerCase());
       } else {
-        // Backward compatibility: allow phone-based identifier
         try {
           const normPhone = normalisePhone(identifier);
           user = db
@@ -193,7 +178,7 @@ router.post(
   }
 );
 
-// ── Verify OTP — kept for backward compatibility ─────────────────────────────
+// ── Verify OTP ────────────────────────────────────────────────────────────────
 router.post("/patient/verify-otp", async (req, res) => {
   try {
     cleanOTPs();
@@ -280,7 +265,7 @@ router.post("/patient/verify-otp", async (req, res) => {
   }
 });
 
-// ── Resend OTP — kept for backward compatibility ─────────────────────────────
+// ── Resend OTP ────────────────────────────────────────────────────────────────
 router.post("/patient/resend-otp", async (req, res) => {
   try {
     const { otpId } = req.body;
@@ -347,7 +332,6 @@ router.post("/patient/google", async (req, res) => {
       user = db.prepare("SELECT * FROM users WHERE id=?").get(id);
     }
 
-    // No mandatory phone gate.
     return res.json({
       token: sign({ id: user.id, email: user.email, name: user.name, role: "patient" }),
       user: { id: user.id, email: user.email, name: user.name, role: "patient" },
@@ -364,7 +348,7 @@ router.post("/patient/google", async (req, res) => {
   }
 });
 
-// ── Google phone OTP endpoint kept for backward compatibility ────────────────
+// ── Google phone OTP ─────────────────────────────────────────────────────────
 router.post("/patient/google-phone-otp", async (req, res) => {
   try {
     const { userId, phone } = req.body;
@@ -497,7 +481,7 @@ router.get("/me", (req, res) => {
   }
 });
 
-// ── Forgot Password Step 1: send reset email ────────────────────────────────
+// ── Forgot Password: send reset email via Resend ─────────────────────────────
 router.post(
   "/patient/forgot-password",
   [body("email").trim().isEmail().withMessage("Valid email is required")],
@@ -518,27 +502,13 @@ router.post(
         });
       }
 
-      if (!mailTransporter) {
-        return res.status(503).json({
-          error: "Password reset email service is not configured. Please try again later.",
-        });
-      }
-
-      if (!mailTransporter) {
-        return res.status(503).json({
-          error: "Password reset email service is not configured. Please try again later.",
-        });
-      }
-
       const resetToken = jwt.sign(
         { id: user.id, role: "patient", purpose: "reset-password" },
         SECRET,
         { expiresIn: process.env.RESET_TOKEN_EXPIRES_IN || "30m" }
       );
 
-      const resetLink = `${FRONTEND_URL}/login?mode=reset&token=${encodeURIComponent(
-        resetToken
-      )}`;
+      const resetLink = `${FRONTEND_URL}/login?mode=reset&token=${encodeURIComponent(resetToken)}`;
 
       await sendResetPasswordEmail(user.email, user.name, resetLink);
 
@@ -596,7 +566,7 @@ router.post("/patient/reset-password-by-token", async (req, res) => {
   }
 });
 
-// ── Legacy OTP reset endpoint (optional backward compatibility) ──────────────
+// ── Legacy OTP reset endpoint ─────────────────────────────────────────────────
 router.post("/patient/reset-password", async (req, res) => {
   try {
     const { otpId, otp, newPassword } = req.body;
