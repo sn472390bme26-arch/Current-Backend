@@ -82,7 +82,7 @@ db.exec(`
     session_id          TEXT NOT NULL,
     payment_done        INTEGER NOT NULL DEFAULT 0,
     status              TEXT NOT NULL DEFAULT 'confirmed'
-                        CHECK(status IN ('confirmed','completed','unvisited','cancelled')),
+                        CHECK(status IN ('confirmed','completed','unvisited','cancelled','session_ended')),
     phone               TEXT,
     complaint           TEXT,
     razorpay_order_id   TEXT,
