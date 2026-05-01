@@ -207,7 +207,7 @@ router.post("/:sessionId/close", requireDoctorOrAdmin, (req, res) => {
     const untouchedBookings = db.prepare(
       "SELECT id FROM bookings WHERE session_id=? AND status='confirmed' AND payment_done=1"
     ).all(req.params.sessionId);
-    db.prepare("UPDATE bookings SET status='session_ended' WHERE session_id=? AND status='confirmed'")
+    db.prepare("UPDATE bookings SET status='unvisited' WHERE session_id=? AND status='confirmed'")
       .run(req.params.sessionId);
     for (const b of untouchedBookings) refundBooking(b.id).catch(() => {});
   });
