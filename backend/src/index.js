@@ -13,6 +13,7 @@ const fs         = require("fs");
 
 const db = require("./db/init");
 const { setupWebSocket } = require("./services/ws");
+const { startScheduler } = require("./services/scheduler");
 
 // ── Global crash guards ───────────────────────────────────────────────────────
 process.on("uncaughtException", (err) => {
@@ -178,6 +179,7 @@ app.use((err, _req, res, _next) => {
 // ── HTTP + WebSocket server ───────────────────────────────────────────────────
 const server = http.createServer(app);
 setupWebSocket(server);
+startScheduler();
 
 server.maxConnections  = 1000;
 server.keepAliveTimeout = 65000;
