@@ -204,8 +204,12 @@ router.post("/:sessionId/close", requireDoctorOrAdmin, (req, res) => {
       if (s === "red" || s === "yellow") statuses[Number(n)] = "unvisited";
 
     saveState(req.params.sessionId, statuses, state.prioritySlots, null, null, true);
+    const untouchedBookings = db.prepare(
+      "SELECT id FROM bookings WHERE session_id=? AND status='confirmed' AND payment_done=1"
+    ).all(req.params.sessionId);
     db.prepare("UPDATE bookings SET status='unvisited' WHERE session_id=? AND status='confirmed'")
       .run(req.params.sessionId);
+    for (const b of untouchedBookings) refundBooking(b.id).catch(() => {});
   });
 });
 
