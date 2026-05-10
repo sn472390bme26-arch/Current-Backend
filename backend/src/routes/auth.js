@@ -42,6 +42,10 @@ function isLikelyEmail(value) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(String(value || "").trim());
 }
 
+function isGmailAddress(value) {
+  return isLikelyEmail(value) && String(value || "").trim().toLowerCase().endsWith("@gmail.com");
+}
+
 async function sendResetPasswordEmail(toEmail, name, resetLink) {
   const safeName = name || "there";
 
@@ -84,7 +88,17 @@ router.post(
     body("password")
       .isLength({ min: 6 })
       .withMessage("Password must be at least 6 chars"),
-    body("email").trim().isEmail().withMessage("Valid email is required"),
+    body("email")
+      .trim()
+      .isEmail()
+      .withMessage("Valid email is required")
+      .bail()
+      .custom((value) => {
+        if (!isGmailAddress(value)) {
+          throw new Error("Please use a Gmail address");
+        }
+        return true;
+      }),
   ],
   async (req, res) => {
     if (!validate(req, res)) return;

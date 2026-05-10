@@ -39,6 +39,10 @@ export default function LoginPage() {
   const [showAdminPassword, setShowAdminPassword] = useState(false);
   const [loading, setLoading] = useState(false);
 
+  function isGmailAddress(value: string) {
+    return value.trim().toLowerCase().endsWith("@gmail.com");
+  }
+
   function switchPatientMode(mode: "login" | "signup") {
     setPatientMode(mode);
     setPatientEmail("");
@@ -53,6 +57,10 @@ export default function LoginPage() {
     const password = patientPassword;
     if (!name || !email || !password) {
       toast.error("Please fill all fields");
+      return;
+    }
+    if (!isGmailAddress(email)) {
+      toast.error("Please use a Gmail address");
       return;
     }
     setLoading(true);
