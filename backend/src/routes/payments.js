@@ -229,23 +229,25 @@ router.post("/verify", requireAuth, async (req, res) => {
       console.log(`[Razorpay] Booking confirmed: ${bookingId} token ${tokenNumber} order ${razorpay_order_id}`);
     })();
 
-    // Broadcast to WebSocket clients
-    try {
-    sendBookingConfirmation({
-      phone: booking.phone || patient.phone,
-      patientName: patient.name,
-      doctorName: doctorName || doctor.name,
-      hospitalName: hospitalName || "",
-      date, session,
-      tokenNumber: booking.token_number,
-    }).catch(() => {});
-      broadcast(sessionId, { type: "token_booked", tokenNumber: booking.token_number, sessionId });
-    } catch (wsErr) {
-      console.error("[payments] WS broadcast error:", wsErr.message);
-      // Don't fail the request just because WS broadcast failed
-    }
-
     res.json({ success: true, booking: formatBooking(booking) });
+
+    // Side effects run after the API response so checkout completion is not held up.
+    setImmediate(() => {
+      try {
+        sendBookingConfirmation({
+          phone: booking.phone || patient.phone,
+          patientName: patient.name,
+          doctorName: doctorName || doctor.name,
+          hospitalName: hospitalName || "",
+          date,
+          session,
+          tokenNumber: booking.token_number,
+        }).catch(() => {});
+        broadcast(sessionId, { type: "token_booked", tokenNumber: booking.token_number, sessionId });
+      } catch (wsErr) {
+        console.error("[payments] WS broadcast error:", wsErr.message);
+      }
+    });
   } catch (err) {
     console.error("[payments verify]", err.message);
     if (err.message?.includes("timeout"))
