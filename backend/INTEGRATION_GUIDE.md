@@ -101,7 +101,7 @@ Test in this order:
 3. **Add a doctor** → Admin panel → Doctors → Add Doctor (select the hospital, add a phone number)
 4. **Patient sign up** → Log out, open a new tab, sign up as a patient
 5. **Book a token** → Browse hospitals → find the doctor → book
-6. **Doctor login** → Log out, log in as Doctor with the DOC-XXXXX code + phone
+6. **Doctor login** → Log out, log in as Doctor with the new code format (`INITIALS.HOSPITAL.CITY.01`) + phone
 7. **Regulate tokens** → Click tokens in the doctor dashboard — watch them update live in the patient tab
 
 ---

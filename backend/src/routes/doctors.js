@@ -5,13 +5,63 @@ const { requireAdmin, requireDoctorOrAdmin } = require("../middleware/auth");
 
 const router = express.Router();
 
-function nextDoctorCode() {
-  const row = db.prepare(
-    "SELECT code FROM doctors ORDER BY CAST(SUBSTR(code, INSTR(code,'-')+1) AS INTEGER) DESC LIMIT 1"
-  ).get();
-  if (!row) return "DOC-00001";
-  const num = parseInt(row.code.replace(/\D/g, ""), 10) || 0;
-  return `DOC-${String(num + 1).padStart(5, "0")}`;
+function cleanCode(value) {
+  return String(value || "").trim().toUpperCase().replace(/\s+/g, "");
+}
+
+function shortLabel(value, length) {
+  return String(value || "")
+    .trim()
+    .slice(0, length)
+    .replace(/\s+/g, "")
+    .toUpperCase();
+}
+
+function doctorInitials(name) {
+  return String(name || "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map(part => part[0])
+    .join("")
+    .toUpperCase();
+}
+
+function parseSerial(code) {
+  const match = String(code || "").match(/(\d+)$/);
+  return match ? parseInt(match[1], 10) || 0 : 0;
+}
+
+function hospitalCodeParts(hospital) {
+  const hospitalShort = shortLabel(hospital.name, 4);
+  const cityShort = shortLabel(hospital.area, 3);
+  return { hospitalShort, cityShort };
+}
+
+function nextDoctorCode({ name, hospitalId }) {
+  const hospital = db.prepare("SELECT name, area FROM hospitals WHERE id=?").get(hospitalId);
+  if (!hospital) throw new Error("Hospital not found");
+
+  const { hospitalShort, cityShort } = hospitalCodeParts(hospital);
+  const initials = doctorInitials(name);
+  const prefix = `${initials}.${hospitalShort}.${cityShort}`;
+
+  const rows = db.prepare("SELECT code FROM doctors WHERE hospital_id=?").all(hospitalId);
+  let maxSerial = 0;
+
+  for (const row of rows) {
+    const code = cleanCode(row.code);
+    if (!code.startsWith(`${prefix}.`)) continue;
+    maxSerial = Math.max(maxSerial, parseSerial(code));
+  }
+
+  let serial = maxSerial + 1;
+  while (true) {
+    const candidate = `${prefix}.${String(serial).padStart(2, "0")}`;
+    const existing = db.prepare("SELECT 1 FROM doctors WHERE UPPER(code)=UPPER(?) LIMIT 1").get(candidate);
+    if (!existing) return candidate;
+    serial += 1;
+  }
 }
 
 function row2doctor(r) {
@@ -71,7 +121,7 @@ router.post("/", requireAdmin, (req, res) => {
     const hospital = db.prepare("SELECT id FROM hospitals WHERE id=?").get(hospitalId);
     if (!hospital) return res.status(404).json({ error: "Hospital not found" });
 
-    const code = nextDoctorCode();
+    const code = nextDoctorCode({ name, hospitalId });
     const id   = `d_${Date.now()}`;
 
     db.prepare(`
@@ -108,11 +158,25 @@ router.patch("/:id", requireDoctorOrAdmin, (req, res) => {
     const {
       specialty, hospitalId, isAvailable, bio, sessionTimings,
       yearsOfExperience, education, languages, tokensPerSession,
-      phone, contactPhone, photo, name, sessions, price, consultationFee,
+      phone, contactPhone, photo, name, sessions, price, consultationFee, code,
     } = req.body;
+
+    if (code !== undefined && req.user.role !== "admin") {
+      return res.status(403).json({ error: "Only admins can change doctor codes" });
+    }
 
     // Never overwrite phone with empty string — phone is the login password
     const finalPhone = (contactPhone || phone || "").trim() || null;
+    const finalCode = code === undefined ? null : cleanCode(code);
+
+    if (code !== undefined && !finalCode) {
+      return res.status(400).json({ error: "code cannot be empty" });
+    }
+
+    if (finalCode) {
+      const existing = db.prepare("SELECT id FROM doctors WHERE UPPER(code)=UPPER(?) AND id<>?").get(finalCode, req.params.id);
+      if (existing) return res.status(409).json({ error: "Doctor code already exists" });
+    }
 
     db.prepare(`
       UPDATE doctors SET
@@ -130,7 +194,8 @@ router.patch("/:id", requireDoctorOrAdmin, (req, res) => {
         tokens_per_session  = COALESCE(?, tokens_per_session),
         price               = COALESCE(?, price),
         consultation_fee    = COALESCE(?, consultation_fee),
-        phone               = COALESCE(?, phone)
+        phone               = COALESCE(?, phone),
+        code                = COALESCE(?, code)
       WHERE id=?
     `).run(
       name         || null,
@@ -148,6 +213,7 @@ router.patch("/:id", requireDoctorOrAdmin, (req, res) => {
       price        ?? null,
       consultationFee ?? price ?? null,
       finalPhone,
+      finalCode,
       req.params.id
     );
 

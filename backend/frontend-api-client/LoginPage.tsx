@@ -261,7 +261,7 @@ export default function LoginPage() {
                     <Label htmlFor="doctor-code">Doctor Login Code</Label>
                     <div className="relative">
                       <KeyRound className="absolute left-3 top-2.5 w-4 h-4 text-gray-400" />
-                      <Input id="doctor-code" className="pl-9 font-mono tracking-widest" placeholder="DOC-00001"
+                      <Input id="doctor-code" className="pl-9 font-mono tracking-widest" placeholder="TM.GIRE.RAJ.01"
                         value={doctorCode} onChange={e => setDoctorCode(e.target.value)} />
                     </div>
                     <p className="text-xs text-gray-400">Your unique code assigned by the admin</p>
